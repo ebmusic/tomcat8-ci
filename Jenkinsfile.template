@@ -1,0 +1,72 @@
+pipeline {
+  agent any
+  triggers { pollSCM('H/5 * * * *') }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '3'))
+    timeout(time: 1, unit: 'HOURS')
+  }
+
+  environment {
+    // This is the git branch we consider 'latest'
+    MAINLINE_BRANCH = "<BRANCH>"
+
+    // Define the package name that gets built
+    PACKAGE_NAME="<ECR Container Name>"
+
+    // Docker ECR registry for publishing images to
+    PUBLISH_REGISTRY="https://<AWS ACCT NUM>.dkr.ecr.<AWS Region>.amazonaws.com"
+    PUBLISH_NAME="<AWS ACCT NUM>.dkr.ecr.<AWS Region>.amazonaws.com"
+    ECR_USER="<IAM User for ECR Access>"
+
+    // ECS constants
+    ECS_SERVICE_ROLE="<ECS Service Role"
+    EXECUTION_ROLE_RAW="arn:aws:iam::<AWS ACCT NUM>:role"
+    CLUSTER_NAME="<ECS Cluster Name>"
+    FAMILY="<Family Name>"
+    SERVICE_NAME="<ECS Service Name"
+    APP_PORT=<Application Port>
+    MEMORY=<Memory>
+    CPU=<CPU>
+    AWS_REGION=<AWS Region>
+  }
+
+  stages {
+    stage('Build') {
+      steps {
+        sh """
+        docker build \
+          --build-arg BUILD_DATE="\$(date -u +%Y-%m-%dT%T%z)" \
+          --build-arg VCS_REF="${env.GIT_COMMIT}" \
+          --build-arg VCS_URL="${env.GIT_URL}" \
+          --build-arg VERSION="${env.GIT_COMMIT}" \
+          -t ${env.PACKAGE_NAME}:build-${env.BUILD_NUMBER} .
+        """
+      }
+    }
+
+    stage('Publish') {
+      steps {
+        script {
+          docker.withRegistry(PUBLISH_REGISTRY, 'ecr:' + AWS_REGION + ':' + ECR_USER) {
+          docker.image(PACKAGE_NAME + ':build-' + BUILD_NUMBER).push('latest')
+          }
+        }
+      }
+    }
+
+    stage('Deploy to ECS') {
+      steps {
+        sh """
+        ./ecs.sh
+        """
+      }
+    }
+  }
+
+  post {
+    // teardown
+    always {
+       cleanWs notFailBuild: true
+    }
+  }
+}
